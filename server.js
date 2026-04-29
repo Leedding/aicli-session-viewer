@@ -1,5 +1,6 @@
 import http from "node:http";
 import https from "node:https";
+import { watch } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,11 @@ const TITLE_API_KEY =
 let titleCache = {};
 let cachedFiles = null;
 let titleGenerationStarted = false;
+let titleGenerationRunning = false;
+let titleGenerationQueued = false;
+let historyRefreshTimer = null;
+let historyRefreshRunning = false;
+let historyRefreshQueued = false;
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -41,6 +47,7 @@ async function main() {
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`Claude history viewer: http://127.0.0.1:${PORT}`);
     console.log(`Reading sessions from: ${HISTORY_ROOT}`);
+    startHistoryWatcher();
     startTitleGeneration();
   });
 }
@@ -66,6 +73,58 @@ async function handleRequest(req, res) {
 async function refreshFiles() {
   cachedFiles = await scanHistoryFiles();
   return cachedFiles;
+}
+
+function startHistoryWatcher() {
+  try {
+    const watcher = watch(HISTORY_ROOT, { recursive: true }, (eventType, filename) => {
+      if (!shouldHandleHistoryWatchEvent(filename)) return;
+      scheduleHistoryRefresh(`${eventType}: ${filename || HISTORY_ROOT}`);
+    });
+    watcher.on("error", (error) => {
+      console.error("History watcher error:", error.message);
+    });
+    console.log("History file watcher: enabled");
+  } catch (error) {
+    console.error("History file watcher disabled:", error.message);
+  }
+}
+
+function shouldHandleHistoryWatchEvent(filename) {
+  if (!filename) return true;
+  const name = path.basename(String(filename));
+  if (!name || name.startsWith(".") || name === "memory") return false;
+  return shouldIncludeHistoryFile(name) || !path.extname(name);
+}
+
+function scheduleHistoryRefresh(reason) {
+  clearTimeout(historyRefreshTimer);
+  historyRefreshTimer = setTimeout(() => {
+    refreshHistoryFromWatch(reason).catch((error) => {
+      console.error("History refresh failed:", error.message);
+    });
+  }, 500);
+}
+
+async function refreshHistoryFromWatch(reason) {
+  if (historyRefreshRunning) {
+    historyRefreshQueued = true;
+    return;
+  }
+  historyRefreshRunning = true;
+  try {
+    const before = cachedFiles?.length || 0;
+    await refreshFiles();
+    const after = cachedFiles?.length || 0;
+    console.log(`History refreshed: ${after} sessions (${before} before, ${reason})`);
+    if (TITLE_API_KEY) await generateMissingTitles({ logNoPending: false, logSkip: false });
+  } finally {
+    historyRefreshRunning = false;
+    if (historyRefreshQueued) {
+      historyRefreshQueued = false;
+      await refreshHistoryFromWatch("queued changes");
+    }
+  }
 }
 
 async function getFiles() {
@@ -432,17 +491,37 @@ async function writeTitleCache() {
 function startTitleGeneration() {
   if (titleGenerationStarted) return;
   titleGenerationStarted = true;
-  generateMissingTitles().catch((error) => {
+  generateMissingTitles({ logNoPending: true, logSkip: true }).catch((error) => {
     console.error("Title generation failed:", error.message);
   });
 }
 
-async function generateMissingTitles() {
+async function generateMissingTitles(options = {}) {
+  const { logNoPending = true, logSkip = true } = options;
+  if (titleGenerationRunning) {
+    titleGenerationQueued = true;
+    return;
+  }
+  titleGenerationRunning = true;
+  try {
+    await generateMissingTitlesOnce({ logNoPending, logSkip });
+  } finally {
+    titleGenerationRunning = false;
+    if (titleGenerationQueued) {
+      titleGenerationQueued = false;
+      await generateMissingTitles({ logNoPending: false, logSkip: false });
+    }
+  }
+}
+
+async function generateMissingTitlesOnce({ logNoPending, logSkip }) {
   const files = await getFiles();
   const pending = await findPendingTitleFiles(files);
-  console.log(`DeepSeek title generation: ${pending.length} sessions pending`);
+  if (logNoPending || pending.length > 0) {
+    console.log(`DeepSeek title generation: ${pending.length} sessions pending`);
+  }
   if (!TITLE_API_KEY) {
-    console.log("DeepSeek title generation skipped: no API key configured");
+    if (logSkip) console.log("DeepSeek title generation skipped: no API key configured");
     return;
   }
 

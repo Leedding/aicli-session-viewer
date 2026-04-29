@@ -2,6 +2,7 @@ const state = {
   tree: null,
   files: [],
   activePath: "",
+  treeSignature: "",
   query: "",
   showSystem: false,
   toolsExpanded: false,
@@ -100,6 +101,7 @@ async function init() {
   updateToolButton();
   renderTree();
   if (state.files[0]) loadSession(state.files[0].path);
+  startAutoRefresh();
 }
 
 async function refreshPageData() {
@@ -124,6 +126,40 @@ async function refreshPageData() {
     refreshButton.disabled = false;
     refreshButton.textContent = "刷新";
   }
+}
+
+function startAutoRefresh() {
+  setInterval(() => {
+    refreshTreeInBackground().catch(() => {
+      // Manual refresh surfaces errors. Background refresh stays quiet.
+    });
+  }, 5000);
+}
+
+async function refreshTreeInBackground() {
+  const previousPath = state.activePath;
+  const previousSignature = treeSignature(state.tree.files);
+  const nextTree = await fetchJson("/api/refresh");
+  const nextSignature = treeSignature(nextTree.files);
+  if (nextSignature === previousSignature) return;
+
+  state.tree = nextTree;
+  state.treeSignature = nextSignature;
+  rootPath.textContent = state.tree.root;
+  await refreshVisibleFiles();
+  renderTree();
+
+  if (!previousPath && state.files[0]) {
+    await loadSession(state.files[0].path);
+  } else if (previousPath && !state.tree.files.some((file) => file.path === previousPath)) {
+    state.activePath = "";
+    chat.textContent = "";
+    chat.append(el("div", { class: "empty" }, "当前会话文件已不存在"));
+  }
+}
+
+function treeSignature(files) {
+  return files.map((file) => `${file.path}:${file.modifiedAt}:${file.title}`).join("|");
 }
 
 async function refreshVisibleFiles() {
