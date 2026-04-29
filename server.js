@@ -51,6 +51,7 @@ async function handleRequest(req, res) {
     if (url.pathname === "/api/tree") return sendJson(res, await getTree());
     if (url.pathname === "/api/session") return sendJson(res, await getSession(url));
     if (url.pathname === "/api/search") return sendJson(res, await search(url));
+    if (url.pathname === "/api/title") return sendJson(res, await saveManualTitle(req, url));
     if (url.pathname === "/api/refresh") {
       await refreshFiles();
       return sendJson(res, await getTree());
@@ -119,6 +120,32 @@ async function search(url) {
     }
   }
   return { root: HISTORY_ROOT, query, totalMatches, files: matches };
+}
+
+async function saveManualTitle(req, url) {
+  if (req.method !== "POST") throw httpError(405, "Method not allowed");
+  const relPath = url.searchParams.get("path");
+  const filePath = safeResolveHistoryPath(relPath);
+  const body = await readJsonBody(req);
+  const title = sanitizeManualTitle(body.title || "");
+  if (!title) throw httpError(400, "Title is required");
+
+  const text = await fs.readFile(filePath, "utf8");
+  const parsed = parseClaudeJsonl(text);
+  const name = path.basename(relPath);
+  const existing = titleCache[name] || {};
+  titleCache[name] = {
+    ...existing,
+    title,
+    path: relPath,
+    firstQuestion: existing.firstQuestion || findFirstUserQuestion(parsed.messages),
+    model: "manual",
+    manual: true,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeTitleCache();
+  cachedFiles = null;
+  return { path: relPath, name, title };
 }
 
 async function scanHistoryFiles() {
@@ -504,6 +531,32 @@ function generateChineseTitle(firstQuestion) {
 
 function sanitizeTitle(title) {
   return title.replace(/^["'“”‘’\s]+|["'“”‘’\s。！？!?,，、：:；;]+$/g, "").slice(0, 24);
+}
+
+function sanitizeManualTitle(title) {
+  return String(title).replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > 32 * 1024) {
+        reject(httpError(413, "Request body too large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch {
+        reject(httpError(400, "Invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
 }
 
 async function serveStatic(urlPath, res) {

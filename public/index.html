@@ -26,7 +26,7 @@
     <main class="main">
       <header class="session-header">
         <div>
-          <h2 id="sessionTitle">选择一个会话</h2>
+          <h2 id="sessionTitle" contenteditable="true" spellcheck="false" title="点击编辑标题">选择一个会话</h2>
           <div id="sessionPath" class="session-path"></div>
           <div id="sessionMeta" class="session-meta"></div>
         </div>
@@ -37,6 +37,10 @@
         </div>
       </header>
       <section id="chat" class="chat"></section>
+      <div class="scroll-actions" aria-label="聊天滚动">
+        <button id="scrollTop" class="scroll-button" type="button" aria-label="回到顶部">↑</button>
+        <button id="scrollBottom" class="scroll-button" type="button" aria-label="回到底部">↓</button>
+      </div>
     </main>
     <script src="/app.js" type="module"></script>
   </body>

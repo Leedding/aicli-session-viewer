@@ -24,6 +24,8 @@ const chat = document.querySelector("#chat");
 const refreshButton = document.querySelector("#refreshButton");
 const toggleTools = document.querySelector("#toggleTools");
 const toggleSystem = document.querySelector("#toggleSystem");
+const scrollTopButton = document.querySelector("#scrollTop");
+const scrollBottomButton = document.querySelector("#scrollBottom");
 
 searchInput.addEventListener("input", debounce(async () => {
   state.query = searchInput.value.trim();
@@ -64,6 +66,28 @@ refreshButton.addEventListener("click", () => {
     chat.textContent = "";
     chat.append(el("div", { class: "empty" }, `刷新失败：${error.message}`));
   });
+});
+
+sessionTitle.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    sessionTitle.blur();
+  }
+});
+
+sessionTitle.addEventListener("blur", () => {
+  saveSessionTitle().catch((error) => {
+    sessionTitle.textContent = sessionTitle.dataset.savedTitle || "选择一个会话";
+    chat.append(el("div", { class: "empty" }, `标题保存失败：${error.message}`));
+  });
+});
+
+scrollTopButton.addEventListener("click", () => {
+  chat.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+scrollBottomButton.addEventListener("click", () => {
+  chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
 });
 
 await init();
@@ -223,6 +247,7 @@ async function loadSession(path) {
 
   const session = await fetchJson(`/api/session?path=${encodeURIComponent(path)}`);
   sessionTitle.textContent = session.title;
+  sessionTitle.dataset.savedTitle = session.title;
   sessionPath.textContent = session.path;
   const meta = [
     `${session.messages.filter((m) => !m.hidden).length} 条消息`,
@@ -239,6 +264,32 @@ async function loadSession(path) {
 
   const firstMatch = state.query ? chat.querySelector(".has-match") : null;
   if (firstMatch) firstMatch.scrollIntoView({ block: "center" });
+}
+
+async function saveSessionTitle() {
+  if (!state.activePath) return;
+  const title = sessionTitle.textContent.replace(/\s+/g, " ").trim();
+  const previousTitle = sessionTitle.dataset.savedTitle || "";
+  if (!title || title === previousTitle) {
+    sessionTitle.textContent = previousTitle || "选择一个会话";
+    return;
+  }
+
+  const result = await fetchJson(`/api/title?path=${encodeURIComponent(state.activePath)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  sessionTitle.textContent = result.title;
+  sessionTitle.dataset.savedTitle = result.title;
+  updateFileTitle(state.tree.files, result.path, result.title);
+  updateFileTitle(state.files, result.path, result.title);
+  renderTree();
+}
+
+function updateFileTitle(files, path, title) {
+  const file = files.find((item) => item.path === path);
+  if (file) file.title = title;
 }
 
 function renderMessage(message) {
@@ -309,8 +360,8 @@ function highlight(text) {
   return fragment;
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url);
+async function fetchJson(url, options) {
+  const res = await fetch(url, options);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
