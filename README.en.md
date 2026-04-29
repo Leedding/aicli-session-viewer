@@ -1,5 +1,7 @@
 # AI History Viewer
 
+[中文](README.md)
+
 A local AI conversation history viewer for browsing Claude and Codex sessions. The project ships as a zero-dependency Node.js server with a static frontend, reading local JSONL/JSON/Markdown/Text history files and rendering them in the browser.
 
 ## Features

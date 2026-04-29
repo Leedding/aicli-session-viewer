@@ -1,5 +1,7 @@
 # AI History Viewer
 
+[English](README.en.md)
+
 一个本地 AI 历史对话浏览器，用于查看 Claude 和 Codex 的会话记录。项目包含一个零依赖 Node.js 服务和静态前端页面，会从本机历史目录读取 JSONL/JSON/Markdown/Text 会话文件并在浏览器中展示。
 
 ## 功能
