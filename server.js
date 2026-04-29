@@ -7,14 +7,34 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 5178);
-const HISTORY_ROOT = path.resolve(
-  process.env.AI_HISTORY_ROOT ||
-    process.env.CLAUDE_HISTORY_ROOT ||
-    path.join(process.env.HOME || "", ".claude", "projects"),
-);
+const DEFAULT_SOURCE = normalizeSourceId(process.env.AI_HISTORY_SOURCE || "claude");
+const SOURCES = {
+  claude: {
+    id: "claude",
+    label: "Claude",
+    root: path.resolve(
+      process.env.AI_HISTORY_ROOT ||
+        process.env.CLAUDE_HISTORY_ROOT ||
+        path.join(process.env.HOME || "", ".claude", "projects"),
+    ),
+    parser: parseClaudeJsonl,
+    supportsProjectView: true,
+  },
+  codex: {
+    id: "codex",
+    label: "Codex",
+    root: path.resolve(
+      process.env.CODEX_SESSION_ROOT ||
+        path.join(process.env.HOME || "", ".codex", "sessions"),
+    ),
+    parser: parseCodexJsonl,
+    supportsProjectView: false,
+  },
+};
 const TITLES_FILE = path.join(__dirname, "titles.json");
+const CODEX_LEGACY_TITLES_FILE = path.resolve(__dirname, "..", "codex_history_chat", "titles.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
-const TITLE_MODEL = process.env.CLAUDE_HISTORY_TITLE_MODEL || "deepseek-v4-flash";
+const TITLE_MODEL = process.env.AI_HISTORY_TITLE_MODEL || process.env.CLAUDE_HISTORY_TITLE_MODEL || "deepseek-v4-flash";
 const TITLE_API_KEY =
   process.env.CLAUDE_HISTORY_DEEPSEEK_API_KEY ||
   process.env.CODEX_HISTORY_DEEPSEEK_API_KEY ||
@@ -23,7 +43,7 @@ const TITLE_API_KEY =
   "";
 
 let titleCache = {};
-let cachedFiles = null;
+const cachedFilesBySource = new Map();
 let titleGenerationStarted = false;
 let titleGenerationRunning = false;
 let titleGenerationQueued = false;
@@ -41,12 +61,14 @@ const mimeTypes = {
 
 async function main() {
   titleCache = await readTitleCache();
-  await refreshFiles();
+  await refreshFiles(getDefaultSource());
 
   const server = http.createServer(handleRequest);
   server.listen(PORT, "127.0.0.1", () => {
-    console.log(`Claude history viewer: http://127.0.0.1:${PORT}`);
-    console.log(`Reading sessions from: ${HISTORY_ROOT}`);
+    console.log(`AI history viewer: http://127.0.0.1:${PORT}`);
+    Object.values(SOURCES).forEach((source) => {
+      console.log(`Reading ${source.label} sessions from: ${source.root}`);
+    });
     startHistoryWatcher();
     startTitleGeneration();
   });
@@ -55,13 +77,14 @@ async function main() {
 async function handleRequest(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
-    if (url.pathname === "/api/tree") return sendJson(res, await getTree());
-    if (url.pathname === "/api/session") return sendJson(res, await getSession(url));
-    if (url.pathname === "/api/search") return sendJson(res, await search(url));
-    if (url.pathname === "/api/title") return sendJson(res, await saveManualTitle(req, url));
+    const source = sourceFromUrl(url);
+    if (url.pathname === "/api/tree") return sendJson(res, await getTree(source));
+    if (url.pathname === "/api/session") return sendJson(res, await getSession(url, source));
+    if (url.pathname === "/api/search") return sendJson(res, await search(url, source));
+    if (url.pathname === "/api/title") return sendJson(res, await saveManualTitle(req, url, source));
     if (url.pathname === "/api/refresh") {
-      await refreshFiles();
-      return sendJson(res, await getTree());
+      await refreshFiles(source);
+      return sendJson(res, await getTree(source));
     }
     return serveStatic(url.pathname, res);
   } catch (error) {
@@ -70,23 +93,38 @@ async function handleRequest(req, res) {
   }
 }
 
-async function refreshFiles() {
-  cachedFiles = await scanHistoryFiles();
-  return cachedFiles;
+function getDefaultSource() {
+  return SOURCES[DEFAULT_SOURCE] || SOURCES.claude;
+}
+
+function normalizeSourceId(value) {
+  return value === "codex" ? "codex" : "claude";
+}
+
+function sourceFromUrl(url) {
+  return SOURCES[normalizeSourceId(url.searchParams.get("source") || DEFAULT_SOURCE)] || SOURCES.claude;
+}
+
+async function refreshFiles(source) {
+  const files = await scanHistoryFiles(source);
+  cachedFilesBySource.set(source.id, files);
+  return files;
 }
 
 function startHistoryWatcher() {
-  try {
-    const watcher = watch(HISTORY_ROOT, { recursive: true }, (eventType, filename) => {
-      if (!shouldHandleHistoryWatchEvent(filename)) return;
-      scheduleHistoryRefresh(`${eventType}: ${filename || HISTORY_ROOT}`);
-    });
-    watcher.on("error", (error) => {
-      console.error("History watcher error:", error.message);
-    });
-    console.log("History file watcher: enabled");
-  } catch (error) {
-    console.error("History file watcher disabled:", error.message);
+  for (const source of Object.values(SOURCES)) {
+    try {
+      const watcher = watch(source.root, { recursive: true }, (eventType, filename) => {
+        if (!shouldHandleHistoryWatchEvent(filename)) return;
+        scheduleHistoryRefresh(source, `${eventType}: ${filename || source.root}`);
+      });
+      watcher.on("error", (error) => {
+        console.error(`${source.label} history watcher error:`, error.message);
+      });
+      console.log(`${source.label} history file watcher: enabled`);
+    } catch (error) {
+      console.error(`${source.label} history file watcher disabled:`, error.message);
+    }
   }
 }
 
@@ -94,58 +132,65 @@ function shouldHandleHistoryWatchEvent(filename) {
   if (!filename) return true;
   const name = path.basename(String(filename));
   if (!name || name.startsWith(".") || name === "memory") return false;
-  return shouldIncludeHistoryFile(name) || !path.extname(name);
+  return shouldIncludeHistoryFile(null, name) || !path.extname(name);
 }
 
-function scheduleHistoryRefresh(reason) {
+function scheduleHistoryRefresh(source, reason) {
   clearTimeout(historyRefreshTimer);
   historyRefreshTimer = setTimeout(() => {
-    refreshHistoryFromWatch(reason).catch((error) => {
+    refreshHistoryFromWatch(source, reason).catch((error) => {
       console.error("History refresh failed:", error.message);
     });
   }, 500);
 }
 
-async function refreshHistoryFromWatch(reason) {
+async function refreshHistoryFromWatch(source, reason) {
   if (historyRefreshRunning) {
     historyRefreshQueued = true;
     return;
   }
   historyRefreshRunning = true;
   try {
-    const before = cachedFiles?.length || 0;
-    await refreshFiles();
-    const after = cachedFiles?.length || 0;
-    console.log(`History refreshed: ${after} sessions (${before} before, ${reason})`);
-    if (TITLE_API_KEY) await generateMissingTitles({ logNoPending: false, logSkip: false });
+    const before = cachedFilesBySource.get(source.id)?.length || 0;
+    const files = await refreshFiles(source);
+    console.log(`${source.label} history refreshed: ${files.length} sessions (${before} before, ${reason})`);
+    if (TITLE_API_KEY) await generateMissingTitles({ source, logNoPending: false, logSkip: false });
   } finally {
     historyRefreshRunning = false;
     if (historyRefreshQueued) {
       historyRefreshQueued = false;
-      await refreshHistoryFromWatch("queued changes");
+      await refreshHistoryFromWatch(source, "queued changes");
     }
   }
 }
 
-async function getFiles() {
-  if (!cachedFiles) return refreshFiles();
-  return cachedFiles;
+async function getFiles(source) {
+  if (!cachedFilesBySource.has(source.id)) return refreshFiles(source);
+  return cachedFilesBySource.get(source.id);
 }
 
-async function getTree() {
+async function getTree(source) {
   return {
-    root: HISTORY_ROOT,
-    files: await getFiles(),
+    source: source.id,
+    sourceLabel: source.label,
+    root: source.root,
+    supportsProjectView: source.supportsProjectView,
+    sources: Object.values(SOURCES).map((item) => ({
+      id: item.id,
+      label: item.label,
+      supportsProjectView: item.supportsProjectView,
+    })),
+    files: await getFiles(source),
   };
 }
 
-async function getSession(url) {
+async function getSession(url, source) {
   const relPath = url.searchParams.get("path");
-  const filePath = safeResolveHistoryPath(relPath);
+  const filePath = safeResolveHistoryPath(source, relPath);
   const stat = await fs.stat(filePath);
   const text = await fs.readFile(filePath, "utf8");
-  const parsed = parseClaudeJsonl(text);
-  const info = await fileInfo(filePath, relPath, stat, parsed);
+  const parsed = source.parser(text);
+  const info = await fileInfo(source, relPath, stat, parsed);
   return {
     ...info,
     rawLineCount: text.split(/\r?\n/).filter(Boolean).length,
@@ -154,62 +199,66 @@ async function getSession(url) {
   };
 }
 
-async function search(url) {
+async function search(url, source) {
   const query = (url.searchParams.get("q") || "").trim();
-  const files = await getFiles();
+  const files = await getFiles(source);
   if (!query) {
-    return { root: HISTORY_ROOT, query, totalMatches: 0, files };
+    return { root: source.root, query, totalMatches: 0, files };
   }
 
   const needle = query.toLocaleLowerCase();
   let totalMatches = 0;
   const matches = [];
   for (const file of files) {
-    const filePath = safeResolveHistoryPath(file.path);
-    let text = "";
+    const filePath = safeResolveHistoryPath(source, file.path);
+    let parsed;
     try {
-      text = await fs.readFile(filePath, "utf8");
+      parsed = source.parser(await fs.readFile(filePath, "utf8"));
     } catch {
       continue;
     }
-    const count = countOccurrences(text.toLocaleLowerCase(), needle);
+    const count = parsed.messages
+      .filter((message) => !message.hidden)
+      .reduce((total, message) => total + countOccurrences(String(message.text || "").toLocaleLowerCase(), needle), 0);
     if (count > 0) {
       totalMatches += count;
       matches.push({ ...file, matchCount: count });
     }
   }
-  return { root: HISTORY_ROOT, query, totalMatches, files: matches };
+  return { root: source.root, query, totalMatches, files: matches };
 }
 
-async function saveManualTitle(req, url) {
+async function saveManualTitle(req, url, source) {
   if (req.method !== "POST") throw httpError(405, "Method not allowed");
   const relPath = url.searchParams.get("path");
-  const filePath = safeResolveHistoryPath(relPath);
+  const filePath = safeResolveHistoryPath(source, relPath);
   const body = await readJsonBody(req);
   const title = sanitizeManualTitle(body.title || "");
   if (!title) throw httpError(400, "Title is required");
 
   const text = await fs.readFile(filePath, "utf8");
-  const parsed = parseClaudeJsonl(text);
+  const parsed = source.parser(text);
   const name = path.basename(relPath);
-  const existing = titleCache[name] || {};
-  titleCache[name] = {
+  const key = titleCacheKey(source, name);
+  const existing = getTitleCache(source, name) || {};
+  titleCache[key] = {
     ...existing,
     title,
     path: relPath,
+    source: source.id,
     firstQuestion: existing.firstQuestion || findFirstUserQuestion(parsed.messages),
     model: "manual",
     manual: true,
     updatedAt: new Date().toISOString(),
   };
   await writeTitleCache();
-  cachedFiles = null;
+  cachedFilesBySource.delete(source.id);
   return { path: relPath, name, title };
 }
 
-async function scanHistoryFiles() {
+async function scanHistoryFiles(source) {
   const files = [];
-  await walk(HISTORY_ROOT, files);
+  await walk(source, source.root, files);
   files.sort((a, b) => {
     const aTime = Date.parse(a.startedAt || a.modifiedAt || "") || 0;
     const bTime = Date.parse(b.startedAt || b.modifiedAt || "") || 0;
@@ -218,12 +267,12 @@ async function scanHistoryFiles() {
   return files;
 }
 
-async function walk(dir, out) {
+async function walk(source, dir, out) {
   let entries = [];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if (dir === HISTORY_ROOT) throw error;
+    if (dir === source.root) throw error;
     return;
   }
 
@@ -231,26 +280,27 @@ async function walk(dir, out) {
     if (entry.name.startsWith(".") || entry.name === "memory") continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      await walk(fullPath, out);
-    } else if (entry.isFile() && shouldIncludeHistoryFile(entry.name)) {
-      const relPath = toPosix(path.relative(HISTORY_ROOT, fullPath));
+      await walk(source, fullPath, out);
+    } else if (entry.isFile() && shouldIncludeHistoryFile(source, entry.name)) {
+      const relPath = toPosix(path.relative(source.root, fullPath));
       const stat = await fs.stat(fullPath);
-      const parsed = await parseFileLight(fullPath);
-      out.push(await fileInfo(fullPath, relPath, stat, parsed));
+      const parsed = await parseFileLight(source, fullPath);
+      out.push(await fileInfo(source, relPath, stat, parsed));
     }
   }
 }
 
-function shouldIncludeHistoryFile(name) {
+function shouldIncludeHistoryFile(source, name) {
   if (name === "sessions-index.json") return false;
   if (/\.meta\.json$/i.test(name)) return false;
+  if (source?.id === "codex") return /\.jsonl$/i.test(name);
   return /\.(jsonl|json|md|txt)$/i.test(name);
 }
 
-async function parseFileLight(filePath) {
+async function parseFileLight(source, filePath) {
   try {
     const text = await fs.readFile(filePath, "utf8");
-    return parseClaudeJsonl(text);
+    return source.parser(text);
   } catch (error) {
     return {
       messages: [{
@@ -265,22 +315,25 @@ async function parseFileLight(filePath) {
   }
 }
 
-async function fileInfo(filePath, relPath, stat, parsed) {
+async function fileInfo(source, relPath, stat, parsed) {
   const name = path.basename(relPath);
-  const cached = titleCache[name];
+  const cached = getTitleCache(source, name);
   const firstQuestion = findFirstUserQuestion(parsed.messages);
-  const startedAt = findStartedAt(parsed.messages, stat);
+  const startedAt = source.id === "codex"
+    ? parseCodexStartTime(name) || findStartedAt(parsed.messages, stat)
+    : findStartedAt(parsed.messages, stat);
   return {
+    source: source.id,
     path: relPath,
     name,
     title: cached?.title || fallbackTitle(firstQuestion, name),
-    treeSegments: treeSegmentsFor(relPath),
+    treeSegments: source.supportsProjectView ? treeSegmentsFor(relPath) : [],
     size: stat.size,
     modifiedAt: stat.mtime.toISOString(),
     startedAt,
     messageCount: parsed.messages.filter((m) => !m.hidden).length,
     workingDirectory: parsed.meta.cwd || "",
-    project: projectNameFromPath(relPath),
+    project: source.supportsProjectView ? projectNameFromPath(relPath) : "",
   };
 }
 
@@ -411,10 +464,116 @@ function summarizeSystemRecord(record) {
   return JSON.stringify(record, null, 2);
 }
 
-function safeResolveHistoryPath(relPath) {
+function parseCodexJsonl(text) {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  const messages = [];
+  const meta = {};
+
+  lines.forEach((line, index) => {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      messages.push({
+        id: `parse-error-${index + 1}`,
+        role: "system",
+        kind: "parse_error",
+        timestamp: null,
+        text: `第 ${index + 1} 行解析失败：${error.message}`,
+      });
+      return;
+    }
+
+    const payload = record.payload || {};
+    if (record.type === "session_meta") {
+      Object.assign(meta, payload);
+      return;
+    }
+    if (record.type !== "response_item") return;
+
+    const base = {
+      id: payload.id || payload.call_id || `${payload.type || "line"}-${index + 1}`,
+      timestamp: record.timestamp || null,
+    };
+
+    if (payload.type === "message") {
+      const textValue = codexContentToText(payload.content).trim();
+      if (!textValue || !["user", "assistant"].includes(payload.role)) return;
+      messages.push({
+        ...base,
+        role: payload.role,
+        kind: "message",
+        text: textValue,
+        hidden: isCodexInternalText(textValue),
+      });
+      return;
+    }
+
+    if (payload.type === "function_call") {
+      messages.push({
+        ...base,
+        role: "tool",
+        kind: "function_call",
+        name: payload.name || "tool",
+        text: compactCodexCommand(payload.arguments),
+      });
+      return;
+    }
+
+    if (payload.type === "function_call_output") {
+      messages.push({
+        ...base,
+        role: "tool",
+        kind: "function_output",
+        name: payload.call_id || "output",
+        text: String(payload.output || "").trim(),
+      });
+    }
+  });
+
+  return { messages, meta };
+}
+
+function codexContentToText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      return part.text || part.input_text || part.output_text || "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function compactCodexCommand(args) {
+  try {
+    const parsed = JSON.parse(args);
+    return parsed.cmd || JSON.stringify(parsed, null, 2);
+  } catch {
+    return String(args || "");
+  }
+}
+
+function isCodexInternalText(text) {
+  const trimmed = text.trim();
+  return trimmed.startsWith("<environment_context>") ||
+    trimmed.startsWith("<permissions instructions>") ||
+    trimmed.startsWith("<collaboration_mode>") ||
+    trimmed.startsWith("<skills_instructions>") ||
+    trimmed.startsWith("<plugins_instructions>") ||
+    trimmed.startsWith("<apps_instructions>");
+}
+
+function parseCodexStartTime(name) {
+  const match = name.match(/rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/);
+  return match ? match[1].replace(/T(\d{2})-(\d{2})-(\d{2})/, "T$1:$2:$3") : "";
+}
+
+function safeResolveHistoryPath(source, relPath) {
   if (!relPath || path.isAbsolute(relPath)) throw httpError(400, "Missing or invalid path");
-  const resolved = path.resolve(HISTORY_ROOT, relPath);
-  const relative = path.relative(HISTORY_ROOT, resolved);
+  const resolved = path.resolve(source.root, relPath);
+  const relative = path.relative(source.root, resolved);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw httpError(403, "Path is outside history root");
   }
@@ -456,7 +615,7 @@ function trimTitle(text) {
 }
 
 function findFirstUserQuestion(messages) {
-  const msg = messages.find((item) => item.role === "user" && item.kind === "message" && item.text?.trim());
+  const msg = messages.find((item) => !item.hidden && item.role === "user" && item.kind === "message" && item.text?.trim());
   return msg?.text?.trim() || "";
 }
 
@@ -476,12 +635,52 @@ function countOccurrences(haystack, needle) {
   return count;
 }
 
+function titleCacheKey(source, name) {
+  return `${source.id}:${name}`;
+}
+
+function getTitleCache(source, name) {
+  const namespaced = titleCache[titleCacheKey(source, name)];
+  if (namespaced) return namespaced;
+  const legacy = titleCache[name];
+  if (!legacy) return null;
+  if (legacy.source && legacy.source !== source.id) return null;
+  return source.id === "claude" || legacy.source === source.id ? legacy : null;
+}
+
 async function readTitleCache() {
+  let cache = {};
   try {
-    return JSON.parse(await fs.readFile(TITLES_FILE, "utf8"));
+    cache = JSON.parse(await fs.readFile(TITLES_FILE, "utf8"));
   } catch {
-    return {};
+    cache = {};
   }
+  return mergeLegacyCodexTitleCache(cache);
+}
+
+async function mergeLegacyCodexTitleCache(cache) {
+  let legacy = {};
+  try {
+    legacy = JSON.parse(await fs.readFile(CODEX_LEGACY_TITLES_FILE, "utf8"));
+  } catch {
+    return cache;
+  }
+
+  let merged = 0;
+  for (const [name, value] of Object.entries(legacy)) {
+    const key = titleCacheKey(SOURCES.codex, name);
+    if (cache[key]?.title || !value?.title) continue;
+    cache[key] = {
+      ...value,
+      source: "codex",
+    };
+    merged += 1;
+  }
+  if (merged > 0) {
+    await fs.writeFile(TITLES_FILE, `${JSON.stringify(cache, null, 2)}\n`);
+    console.log(`Imported ${merged} Codex titles from ${CODEX_LEGACY_TITLES_FILE}`);
+  }
+  return cache;
 }
 
 async function writeTitleCache() {
@@ -491,34 +690,40 @@ async function writeTitleCache() {
 function startTitleGeneration() {
   if (titleGenerationStarted) return;
   titleGenerationStarted = true;
-  generateMissingTitles({ logNoPending: true, logSkip: true }).catch((error) => {
+  generateMissingTitlesForAllSources({ logNoPending: true, logSkip: true }).catch((error) => {
     console.error("Title generation failed:", error.message);
   });
 }
 
+async function generateMissingTitlesForAllSources(options = {}) {
+  for (const source of Object.values(SOURCES)) {
+    await generateMissingTitles({ source, ...options });
+  }
+}
+
 async function generateMissingTitles(options = {}) {
-  const { logNoPending = true, logSkip = true } = options;
+  const { source = getDefaultSource(), logNoPending = true, logSkip = true } = options;
   if (titleGenerationRunning) {
     titleGenerationQueued = true;
     return;
   }
   titleGenerationRunning = true;
   try {
-    await generateMissingTitlesOnce({ logNoPending, logSkip });
+    await generateMissingTitlesOnce({ source, logNoPending, logSkip });
   } finally {
     titleGenerationRunning = false;
     if (titleGenerationQueued) {
       titleGenerationQueued = false;
-      await generateMissingTitles({ logNoPending: false, logSkip: false });
+      await generateMissingTitles({ source, logNoPending: false, logSkip: false });
     }
   }
 }
 
-async function generateMissingTitlesOnce({ logNoPending, logSkip }) {
-  const files = await getFiles();
-  const pending = await findPendingTitleFiles(files);
+async function generateMissingTitlesOnce({ source, logNoPending, logSkip }) {
+  const files = await getFiles(source);
+  const pending = await findPendingTitleFiles(source, files);
   if (logNoPending || pending.length > 0) {
-    console.log(`DeepSeek title generation: ${pending.length} sessions pending`);
+    console.log(`${source.label} DeepSeek title generation: ${pending.length} sessions pending`);
   }
   if (!TITLE_API_KEY) {
     if (logSkip) console.log("DeepSeek title generation skipped: no API key configured");
@@ -528,27 +733,28 @@ async function generateMissingTitlesOnce({ logNoPending, logSkip }) {
   for (const item of pending) {
     try {
       const title = await generateChineseTitle(item.firstQuestion);
-      titleCache[item.file.name] = {
+      titleCache[titleCacheKey(source, item.file.name)] = {
         title,
         path: item.file.path,
+        source: source.id,
         firstQuestion: item.firstQuestion,
         model: TITLE_MODEL,
         updatedAt: new Date().toISOString(),
       };
       await writeTitleCache();
-      console.log(`Title cached: ${item.file.name} -> ${title}`);
-      cachedFiles = null;
+      console.log(`${source.label} title cached: ${item.file.name} -> ${title}`);
+      cachedFilesBySource.delete(source.id);
     } catch (error) {
       console.error(`Generate title failed for ${item.file.path}:`, error.message);
     }
   }
 }
 
-async function findPendingTitleFiles(files) {
+async function findPendingTitleFiles(source, files) {
   const pending = [];
   for (const file of files) {
-    if (titleCache[file.name]?.title) continue;
-    const session = await getSession(new URL(`http://local/api/session?path=${encodeURIComponent(file.path)}`));
+    if (getTitleCache(source, file.name)?.title) continue;
+    const session = await getSession(new URL(`http://local/api/session?path=${encodeURIComponent(file.path)}`), source);
     const firstQuestion = findFirstUserQuestion(session.messages);
     if (firstQuestion) pending.push({ file, firstQuestion });
   }

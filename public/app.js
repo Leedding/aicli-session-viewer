@@ -9,10 +9,16 @@ const state = {
   viewMode: "time",
   timeOrder: "desc",
   collapsedGroups: new Set(),
+  touchedGroups: new Set(),
+  source: "claude",
 };
 
+const COLLAPSE_STORAGE_PREFIX = "aiHistoryCollapsedGroups";
+
+const appTitle = document.querySelector("#appTitle");
 const rootPath = document.querySelector("#rootPath");
 const treeEl = document.querySelector("#tree");
+const sourceButtons = [...document.querySelectorAll(".source-switch button")];
 const projectView = document.querySelector("#projectView");
 const timeView = document.querySelector("#timeView");
 const timeOrderIcon = document.querySelector("#timeOrderIcon");
@@ -36,11 +42,15 @@ searchInput.addEventListener("input", debounce(async () => {
     renderTree();
     return;
   }
-  const result = await fetchJson(`/api/search?q=${encodeURIComponent(state.query)}`);
+  const result = await fetchJson(apiUrl("/api/search", { q: state.query }));
   state.files = result.files;
   searchSummary.textContent = `共匹配 ${result.totalMatches} 处，${result.files.length} 个会话`;
   renderTree();
 }, 220));
+
+sourceButtons.forEach((button) => {
+  button.addEventListener("click", () => switchSource(button.dataset.source));
+});
 
 projectView.addEventListener("click", () => setViewMode("project"));
 timeView.addEventListener("click", () => {
@@ -94,9 +104,11 @@ scrollBottomButton.addEventListener("click", () => {
 await init();
 
 async function init() {
-  state.tree = await fetchJson("/api/tree");
+  state.tree = await fetchJson(apiUrl("/api/tree"));
+  state.source = state.tree.source || state.source;
   state.files = state.tree.files;
-  rootPath.textContent = state.tree.root;
+  loadCollapseState();
+  updateSourceUi();
   updateViewControls();
   updateToolButton();
   renderTree();
@@ -109,8 +121,8 @@ async function refreshPageData() {
   refreshButton.disabled = true;
   refreshButton.textContent = "刷新中";
   try {
-    state.tree = await fetchJson("/api/refresh");
-    rootPath.textContent = state.tree.root;
+    state.tree = await fetchJson(apiUrl("/api/refresh"));
+    updateSourceUi();
     await refreshVisibleFiles();
     renderTree();
     const nextPath = state.files.some((file) => file.path === previousPath)
@@ -139,13 +151,13 @@ function startAutoRefresh() {
 async function refreshTreeInBackground() {
   const previousPath = state.activePath;
   const previousSignature = treeSignature(state.tree.files);
-  const nextTree = await fetchJson("/api/refresh");
+  const nextTree = await fetchJson(apiUrl("/api/refresh"));
   const nextSignature = treeSignature(nextTree.files);
   if (nextSignature === previousSignature) return;
 
   state.tree = nextTree;
   state.treeSignature = nextSignature;
-  rootPath.textContent = state.tree.root;
+  updateSourceUi();
   await refreshVisibleFiles();
   renderTree();
 
@@ -168,22 +180,99 @@ async function refreshVisibleFiles() {
     searchSummary.textContent = "";
     return;
   }
-  const result = await fetchJson(`/api/search?q=${encodeURIComponent(state.query)}`);
+  const result = await fetchJson(apiUrl("/api/search", { q: state.query }));
   state.files = result.files;
   searchSummary.textContent = `共匹配 ${result.totalMatches} 处，${result.files.length} 个会话`;
 }
 
+async function switchSource(source) {
+  if (!source || source === state.source) return;
+  state.source = source;
+  state.activePath = "";
+  state.query = "";
+  state.viewMode = "time";
+  loadCollapseState();
+  searchInput.value = "";
+  searchSummary.textContent = "";
+  chat.textContent = "";
+  chat.append(el("div", { class: "empty" }, "加载中..."));
+  state.tree = await fetchJson(apiUrl("/api/tree"));
+  state.files = state.tree.files;
+  updateSourceUi();
+  updateViewControls();
+  renderTree();
+  if (state.files[0]) await loadSession(state.files[0].path);
+  else {
+    sessionTitle.textContent = "选择一个会话";
+    sessionTitle.dataset.savedTitle = "";
+    sessionPath.textContent = "";
+    sessionMeta.textContent = "";
+    chat.textContent = "";
+    chat.append(el("div", { class: "empty" }, "没有可展示的会话"));
+  }
+}
+
 function setViewMode(mode) {
-  state.viewMode = mode;
+  if (mode === "project" && !state.tree?.supportsProjectView) mode = "time";
+  if (mode !== state.viewMode) {
+    saveCollapseState();
+    state.viewMode = mode;
+    loadCollapseState();
+  } else {
+    state.viewMode = mode;
+  }
   updateViewControls();
   renderTree();
 }
 
 function updateViewControls() {
+  if (!state.tree?.supportsProjectView && state.viewMode === "project") state.viewMode = "time";
+  projectView.hidden = !state.tree?.supportsProjectView;
   projectView.classList.toggle("active", state.viewMode === "project");
+  projectView.disabled = !state.tree?.supportsProjectView;
+  projectView.title = state.tree?.supportsProjectView ? "按项目展示" : "Codex 只按时间展示";
   timeView.classList.toggle("active", state.viewMode === "time");
   timeView.title = state.timeOrder === "desc" ? "时间倒序，点击切换为正序" : "时间正序，点击切换为倒序";
   timeOrderIcon.textContent = state.timeOrder === "desc" ? "▼" : "▲";
+}
+
+function updateSourceUi() {
+  state.source = state.tree?.source || state.source;
+  const label = state.tree?.sourceLabel || (state.source === "codex" ? "Codex" : "Claude");
+  appTitle.textContent = `${label} 历史对话`;
+  document.title = `${label} 历史对话`;
+  rootPath.textContent = state.tree?.root || "";
+  sourceButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.source === state.source);
+  });
+}
+
+function collapseStorageKey() {
+  return `${COLLAPSE_STORAGE_PREFIX}:${state.source}:${state.viewMode}`;
+}
+
+function loadCollapseState() {
+  state.collapsedGroups.clear();
+  state.touchedGroups.clear();
+  try {
+    const saved = JSON.parse(localStorage.getItem(collapseStorageKey()) || "{}");
+    if (Array.isArray(saved.collapsedGroups)) state.collapsedGroups = new Set(saved.collapsedGroups);
+    if (Array.isArray(saved.touchedGroups)) state.touchedGroups = new Set(saved.touchedGroups);
+  } catch {
+    state.collapsedGroups.clear();
+    state.touchedGroups.clear();
+  }
+}
+
+function saveCollapseState() {
+  try {
+    localStorage.setItem(collapseStorageKey(), JSON.stringify({
+      collapsedGroups: [...state.collapsedGroups],
+      touchedGroups: [...state.touchedGroups],
+    }));
+  } catch {
+    // Folding state is a convenience; ignore storage failures.
+  }
 }
 
 function renderTree() {
@@ -223,7 +312,7 @@ function renderNode(node, container, groupPath = "") {
   const groups = [...node.children.values()].sort((a, b) => sortGroupLabel(a.label, b.label));
   for (const group of groups) {
     const currentPath = groupPath ? `${groupPath}/${group.label}` : group.label;
-    const collapsed = state.collapsedGroups.has(currentPath);
+    const collapsed = isGroupCollapsed(currentPath, groupPath);
     const wrapper = el("div", { class: "tree-group" });
     const toggle = el("button", {
       class: "tree-label",
@@ -234,8 +323,10 @@ function renderNode(node, container, groupPath = "") {
     toggle.append(el("span", { class: "tree-caret" }, collapsed ? "▶" : "▼"));
     toggle.append(el("span", {}, group.label));
     toggle.addEventListener("click", () => {
-      if (state.collapsedGroups.has(currentPath)) state.collapsedGroups.delete(currentPath);
+      state.touchedGroups.add(currentPath);
+      if (collapsed) state.collapsedGroups.delete(currentPath);
       else state.collapsedGroups.add(currentPath);
+      saveCollapseState();
       renderTree();
     });
     wrapper.append(toggle);
@@ -261,6 +352,11 @@ function renderNode(node, container, groupPath = "") {
   }
 }
 
+function isGroupCollapsed(currentPath, groupPath) {
+  if (state.touchedGroups.has(currentPath)) return state.collapsedGroups.has(currentPath);
+  return state.viewMode === "project" && !groupPath;
+}
+
 function sortGroupLabel(a, b) {
   if (state.viewMode === "time") {
     const result = a.localeCompare(b, "zh-Hans-CN", { numeric: true });
@@ -281,7 +377,7 @@ async function loadSession(path) {
   chat.textContent = "";
   chat.append(el("div", { class: "empty" }, "加载中..."));
 
-  const session = await fetchJson(`/api/session?path=${encodeURIComponent(path)}`);
+  const session = await fetchJson(apiUrl("/api/session", { path }));
   sessionTitle.textContent = session.title;
   sessionTitle.dataset.savedTitle = session.title;
   sessionPath.textContent = session.path;
@@ -311,7 +407,7 @@ async function saveSessionTitle() {
     return;
   }
 
-  const result = await fetchJson(`/api/title?path=${encodeURIComponent(state.activePath)}`, {
+  const result = await fetchJson(apiUrl("/api/title", { path: state.activePath }), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
@@ -400,6 +496,14 @@ async function fetchJson(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+function apiUrl(path, params = {}) {
+  const searchParams = new URLSearchParams({ source: state.source });
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") searchParams.set(key, value);
+  });
+  return `${path}?${searchParams.toString()}`;
 }
 
 function el(tag, attrs = {}, ...children) {

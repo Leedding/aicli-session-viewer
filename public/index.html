@@ -3,13 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Claude 历史对话</title>
+    <title>AI 历史对话</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h1>Claude 历史对话</h1>
+        <h1 id="appTitle">AI 历史对话</h1>
+        <div class="source-switch" role="group" aria-label="历史来源">
+          <button id="claudeSource" type="button" data-source="claude">Claude</button>
+          <button id="codexSource" type="button" data-source="codex">Codex</button>
+        </div>
         <div id="rootPath" class="root-path"></div>
         <div class="view-switch" role="group" aria-label="目录展示方式">
           <button id="timeView" type="button">

@@ -68,6 +68,32 @@ h2 {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+.source-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f3f5f8;
+}
+
+.source-switch button {
+  height: 26px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #526171;
+  cursor: pointer;
+}
+
+.source-switch button.active {
+  background: var(--panel);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(20, 30, 40, 0.12);
+}
+
 .root-path,
 .session-path,
 .session-meta,
@@ -100,7 +126,7 @@ h2 {
 
 .view-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 4px;
   margin-top: 8px;
   padding: 3px;
@@ -123,6 +149,11 @@ h2 {
   background: var(--panel);
   color: var(--accent);
   box-shadow: 0 1px 2px rgba(20, 30, 40, 0.12);
+}
+
+.view-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .order-icon {
