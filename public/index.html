@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Claude 历史对话</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>Claude 历史对话</h1>
+        <div id="rootPath" class="root-path"></div>
+        <div class="view-switch" role="group" aria-label="目录展示方式">
+          <button id="timeView" type="button">
+            <span>时间</span>
+            <span id="timeOrderIcon" class="order-icon" aria-hidden="true">▼</span>
+          </button>
+          <button id="projectView" type="button">项目</button>
+        </div>
+        <input id="searchInput" type="search" placeholder="搜索历史对话" autocomplete="off" />
+        <div id="searchSummary" class="search-summary"></div>
+      </div>
+      <nav id="tree" class="tree"></nav>
+    </aside>
+    <main class="main">
+      <header class="session-header">
+        <div>
+          <h2 id="sessionTitle">选择一个会话</h2>
+          <div id="sessionPath" class="session-path"></div>
+          <div id="sessionMeta" class="session-meta"></div>
+        </div>
+        <div class="header-actions">
+          <button id="refreshButton" class="ghost-button" type="button">刷新</button>
+          <button id="toggleTools" class="ghost-button" type="button">展开工具</button>
+          <button id="toggleSystem" class="ghost-button" type="button">显示系统消息</button>
+        </div>
+      </header>
+      <section id="chat" class="chat"></section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
