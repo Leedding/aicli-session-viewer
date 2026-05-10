@@ -13,15 +13,16 @@ const state = {
   source: "claude",
   sidebarWidth: 340,
   sidebarHidden: false,
+  theme: "github",
 };
 
 const COLLAPSE_STORAGE_PREFIX = "aiHistoryCollapsedGroups";
 const SIDEBAR_WIDTH_STORAGE_KEY = "aiHistorySidebarWidth";
 const SIDEBAR_HIDDEN_STORAGE_KEY = "aiHistorySidebarHidden";
+const THEME_STORAGE_KEY = "aiHistoryTheme";
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 640;
 
-const appTitle = document.querySelector("#appTitle");
 const sidebar = document.querySelector("#sidebar");
 const sidebarResizer = document.querySelector("#sidebarResizer");
 const hideSidebar = document.querySelector("#hideSidebar");
@@ -29,6 +30,9 @@ const showSidebar = document.querySelector("#showSidebar");
 const rootPath = document.querySelector("#rootPath");
 const treeEl = document.querySelector("#tree");
 const sourceButtons = [...document.querySelectorAll(".source-switch button")];
+const themeToggle = document.querySelector("#themeToggle");
+const themePanel = document.querySelector("#themePanel");
+const themeButtons = [...document.querySelectorAll(".theme-panel button")];
 const projectView = document.querySelector("#projectView");
 const timeView = document.querySelector("#timeView");
 const timeOrderIcon = document.querySelector("#timeOrderIcon");
@@ -123,6 +127,25 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeImagePreview();
 });
 
+themeToggle.addEventListener("click", (e) => {
+  e.stopPropagation();
+  themePanel.hidden = !themePanel.hidden;
+});
+
+themeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setTheme(button.dataset.theme);
+    themePanel.hidden = true;
+  });
+});
+
+document.addEventListener("click", (e) => {
+  if (!themePanel.hidden && !themePanel.contains(e.target) && e.target !== themeToggle) {
+    themePanel.hidden = true;
+  }
+});
+
+loadTheme();
 loadSidebarLayout();
 await init();
 
@@ -262,11 +285,39 @@ function updateViewControls() {
 function updateSourceUi() {
   state.source = state.tree?.source || state.source;
   const label = state.tree?.sourceLabel || (state.source === "codex" ? "Codex" : "Claude");
-  appTitle.textContent = `${label} 历史对话`;
   document.title = `${label} 历史对话`;
   rootPath.textContent = state.tree?.root || "";
   sourceButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.source === state.source);
+  });
+}
+
+function loadTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved && themeButtons.some((b) => b.dataset.theme === saved)) {
+      state.theme = saved;
+    }
+  } catch {
+    // ignore
+  }
+  applyTheme();
+}
+
+function setTheme(theme) {
+  state.theme = theme;
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Theme is a convenience; ignore storage failures.
+  }
+  applyTheme();
+}
+
+function applyTheme() {
+  document.documentElement.dataset.theme = state.theme;
+  themeButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.theme === state.theme);
   });
 }
 

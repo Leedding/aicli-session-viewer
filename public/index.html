@@ -9,10 +9,6 @@
   <body>
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-title-row">
-          <h1 id="appTitle">AI 历史对话</h1>
-          <button id="hideSidebar" class="icon-button" type="button" aria-label="隐藏目录" title="隐藏目录">‹</button>
-        </div>
         <div class="source-switch" role="group" aria-label="历史来源">
           <button id="claudeSource" type="button" data-source="claude">Claude</button>
           <button id="codexSource" type="button" data-source="codex">Codex</button>
@@ -30,7 +26,10 @@
       </div>
       <nav id="tree" class="tree"></nav>
     </aside>
-    <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="调整目录宽度" aria-orientation="vertical" tabindex="0"></div>
+    <div class="resizer-col">
+      <button id="hideSidebar" class="resizer-collapse" type="button" aria-label="隐藏目录" title="隐藏目录">‹</button>
+      <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="调整目录宽度" aria-orientation="vertical" tabindex="0"></div>
+    </div>
     <main class="main">
       <button id="showSidebar" class="show-sidebar-button" type="button" aria-label="显示目录" title="显示目录">☰</button>
       <header class="session-header">
@@ -43,6 +42,17 @@
           <button id="refreshButton" class="ghost-button" type="button">刷新</button>
           <button id="toggleTools" class="ghost-button" type="button">展开工具</button>
           <button id="toggleSystem" class="ghost-button" type="button">显示系统消息</button>
+          <div class="theme-switch">
+            <button id="themeToggle" class="ghost-button" type="button" aria-label="切换主题" title="切换主题">🎨</button>
+            <div id="themePanel" class="theme-panel" hidden>
+              <button data-theme="github" style="--dot:#0969da">GitHub</button>
+              <button data-theme="solarized" style="--dot:#268bd2">Solarized</button>
+              <button data-theme="tokyo" style="--dot:#7aa2f7">Tokyo Night</button>
+              <button data-theme="dracula" style="--dot:#bd93f9">Dracula</button>
+              <button data-theme="catppuccin" style="--dot:#cba6f7">Catppuccin</button>
+              <button data-theme="gruvbox" style="--dot:#d79921">Gruvbox</button>
+            </div>
+          </div>
         </div>
       </header>
       <section id="chat" class="chat"></section>
