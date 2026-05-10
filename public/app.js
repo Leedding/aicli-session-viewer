@@ -452,7 +452,7 @@ function renderMessage(message) {
     bubble.append(details);
   } else {
     if (message.name) bubble.append(el("span", { class: "message-name" }, message.name));
-    bubble.append(highlight(message.text || ""));
+    bubble.append(renderMarkdown(message.text || ""));
   }
 
   stack.append(bubble);
@@ -490,6 +490,188 @@ function highlight(text) {
   }
   fragment.append(document.createTextNode(value.slice(pos)));
   return fragment;
+}
+
+function renderMarkdown(text) {
+  const fragment = document.createDocumentFragment();
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    const fence = line.match(/^```([\w-]*)\s*$/);
+    if (fence) {
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      const code = el("code", fence[1] ? { class: `language-${fence[1]}` } : {});
+      code.append(highlight(codeLines.join("\n")));
+      fragment.append(el("pre", { class: "markdown-code" }, code));
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length + 2, 6);
+      const node = el(`h${level}`, { class: "markdown-heading" });
+      appendInlineMarkdown(node, heading[2]);
+      fragment.append(node);
+      index += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quoteLines = [];
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^>\s?/, ""));
+        index += 1;
+      }
+      fragment.append(el("blockquote", { class: "markdown-quote" }, renderMarkdown(quoteLines.join("\n"))));
+      continue;
+    }
+
+    const listMatch = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+    if (listMatch) {
+      const ordered = /\d/.test(listMatch[2]);
+      const list = el(ordered ? "ol" : "ul", { class: "markdown-list" });
+      while (index < lines.length) {
+        const item = lines[index].match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+        if (!item || /\d/.test(item[2]) !== ordered) break;
+        const li = el("li");
+        appendInlineMarkdown(li, item[3]);
+        list.append(li);
+        index += 1;
+      }
+      fragment.append(list);
+      continue;
+    }
+
+    if (looksLikeTable(lines, index)) {
+      const tableLines = [lines[index]];
+      index += 2;
+      while (index < lines.length && /\|/.test(lines[index]) && lines[index].trim()) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      fragment.append(renderTable(tableLines));
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines, index)) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    const paragraph = el("p", { class: "markdown-paragraph" });
+    appendInlineMarkdown(paragraph, paragraphLines.join("\n"));
+    fragment.append(paragraph);
+  }
+
+  return el("div", { class: "markdown-body" }, fragment);
+}
+
+function isMarkdownBlockStart(lines, index) {
+  const line = lines[index];
+  return /^```/.test(line) ||
+    /^(#{1,6})\s+/.test(line) ||
+    /^>\s?/.test(line) ||
+    /^(\s*)([-*+]|\d+[.)])\s+/.test(line) ||
+    looksLikeTable(lines, index);
+}
+
+function looksLikeTable(lines, index) {
+  return /\|/.test(lines[index] || "") && /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(lines[index + 1] || "");
+}
+
+function renderTable(lines) {
+  const table = el("table", { class: "markdown-table" });
+  const [headerLine, ...bodyLines] = lines;
+  const thead = el("thead");
+  const headerRow = el("tr");
+  splitTableRow(headerLine).forEach((cell) => {
+    const th = el("th");
+    appendInlineMarkdown(th, cell);
+    headerRow.append(th);
+  });
+  thead.append(headerRow);
+  table.append(thead);
+
+  const tbody = el("tbody");
+  bodyLines.forEach((line) => {
+    const row = el("tr");
+    splitTableRow(line).forEach((cell) => {
+      const td = el("td");
+      appendInlineMarkdown(td, cell);
+      row.append(td);
+    });
+    tbody.append(row);
+  });
+  table.append(tbody);
+  return table;
+}
+
+function splitTableRow(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function appendInlineMarkdown(container, text) {
+  const value = String(text || "");
+  const tokenPattern = /(`[^`]+`|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*\s][^*]*\*|_[^_\s][^_]*_|\n)/g;
+  let position = 0;
+  let match;
+
+  while ((match = tokenPattern.exec(value))) {
+    if (match.index > position) container.append(highlight(value.slice(position, match.index)));
+    const token = match[0];
+    if (token === "\n") {
+      container.append(el("br"));
+    } else if (token.startsWith("`")) {
+      const code = el("code", { class: "inline-code" });
+      code.append(highlight(token.slice(1, -1)));
+      container.append(code);
+    } else if (token.startsWith("[")) {
+      const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      container.append(renderMarkdownLink(link[1], link[2]));
+    } else if (token.startsWith("**") || token.startsWith("__")) {
+      const strong = el("strong");
+      strong.append(highlight(token.slice(2, -2)));
+      container.append(strong);
+    } else {
+      const em = el("em");
+      em.append(highlight(token.slice(1, -1)));
+      container.append(em);
+    }
+    position = match.index + token.length;
+  }
+
+  if (position < value.length) container.append(highlight(value.slice(position)));
+}
+
+function renderMarkdownLink(label, href) {
+  const safeHref = safeLinkHref(href);
+  if (!safeHref) {
+    const span = el("span");
+    appendInlineMarkdown(span, label);
+    return span;
+  }
+  const link = el("a", { href: safeHref, target: "_blank", rel: "noreferrer" });
+  appendInlineMarkdown(link, label);
+  return link;
+}
+
+function safeLinkHref(href) {
+  const value = String(href || "").trim();
+  if (/^(https?:|mailto:|#)/i.test(value)) return value;
+  return "";
 }
 
 async function fetchJson(url, options) {
