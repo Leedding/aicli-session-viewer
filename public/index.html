@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
+    <canvas id="matrixCanvas" class="matrix-canvas"></canvas>
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">
         <div class="source-switch" role="group" aria-label="历史来源">
@@ -27,21 +28,21 @@
       <nav id="tree" class="tree"></nav>
     </aside>
     <div class="resizer-col">
-      <button id="hideSidebar" class="resizer-collapse" type="button" aria-label="隐藏目录" title="隐藏目录">‹</button>
       <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="调整目录宽度" aria-orientation="vertical" tabindex="0"></div>
     </div>
     <main class="main">
-      <button id="showSidebar" class="show-sidebar-button" type="button" aria-label="显示目录" title="显示目录">☰</button>
       <header class="session-header">
-        <div>
-          <h2 id="sessionTitle" contenteditable="true" spellcheck="false" title="点击编辑标题">选择一个会话</h2>
-          <div id="sessionPath" class="session-path"></div>
-          <div id="sessionMeta" class="session-meta"></div>
+        <div style="display: flex; gap: 12px; align-items: flex-start;">
+          <button id="toggleSidebar" class="ghost-button" style="padding: 0 8px; font-size: 16px;" type="button" aria-label="切换目录" title="切换目录">◨</button>
+          <div>
+            <h2 id="sessionTitle" contenteditable="true" spellcheck="false" title="点击编辑标题">选择一个会话</h2>
+            <div id="sessionPath" class="session-path"></div>
+            <div id="sessionMeta" class="session-meta"></div>
+          </div>
         </div>
         <div class="header-actions">
           <button id="refreshButton" class="ghost-button" type="button">刷新</button>
-          <button id="toggleTools" class="ghost-button" type="button">展开工具</button>
-          <button id="toggleSystem" class="ghost-button" type="button">显示系统消息</button>
+          <button id="toggleSystem" class="ghost-button" type="button">显示系统及工具</button>
           <div class="theme-switch">
             <button id="themeToggle" class="ghost-button" type="button" aria-label="切换主题" title="切换主题">🎨</button>
             <div id="themePanel" class="theme-panel" hidden>

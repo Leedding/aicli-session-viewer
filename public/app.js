@@ -1,3 +1,24 @@
+console.log(
+`%c         \\/      \\/
+         /\\      /\\
+     .--------------.
+    /   .--------.   \\
+   /   |  >    o  |   \\
+  |    |   \\__/   |    | %cb
+%c   \\   '----------'   /
+%co%c  \\                /
+     '--------------'
+        |        |
+       %c===      ===%c`,
+  "color: #FF3B30; font-family: monospace; font-weight: bold; font-size: 14px;",
+  "color: #FFCC00; font-family: monospace; font-weight: bold; font-size: 14px;",
+  "color: #FF3B30; font-family: monospace; font-weight: bold; font-size: 14px;",
+  "color: #FFCC00; font-family: monospace; font-weight: bold; font-size: 14px;",
+  "color: #FF3B30; font-family: monospace; font-weight: bold; font-size: 14px;",
+  "color: #FFCC00; font-family: monospace; font-weight: bold; font-size: 14px;",
+  ""
+);
+
 const state = {
   tree: null,
   files: [],
@@ -5,7 +26,6 @@ const state = {
   treeSignature: "",
   query: "",
   showSystem: false,
-  toolsExpanded: false,
   viewMode: "time",
   timeOrder: "desc",
   collapsedGroups: new Set(),
@@ -13,7 +33,7 @@ const state = {
   source: "claude",
   sidebarWidth: 340,
   sidebarHidden: false,
-  theme: "github",
+  theme: "tokyo",
 };
 
 const COLLAPSE_STORAGE_PREFIX = "aiHistoryCollapsedGroups";
@@ -25,8 +45,7 @@ const MAX_SIDEBAR_WIDTH = 640;
 
 const sidebar = document.querySelector("#sidebar");
 const sidebarResizer = document.querySelector("#sidebarResizer");
-const hideSidebar = document.querySelector("#hideSidebar");
-const showSidebar = document.querySelector("#showSidebar");
+const toggleSidebar = document.querySelector("#toggleSidebar");
 const rootPath = document.querySelector("#rootPath");
 const treeEl = document.querySelector("#tree");
 const sourceButtons = [...document.querySelectorAll(".source-switch button")];
@@ -43,7 +62,6 @@ const sessionPath = document.querySelector("#sessionPath");
 const sessionMeta = document.querySelector("#sessionMeta");
 const chat = document.querySelector("#chat");
 const refreshButton = document.querySelector("#refreshButton");
-const toggleTools = document.querySelector("#toggleTools");
 const toggleSystem = document.querySelector("#toggleSystem");
 const scrollTopButton = document.querySelector("#scrollTop");
 const scrollBottomButton = document.querySelector("#scrollBottom");
@@ -52,6 +70,16 @@ let sidebarDragStart = null;
 
 searchInput.addEventListener("input", debounce(async () => {
   state.query = searchInput.value.trim();
+  
+  if (state.query === "sudo rm -rf /") {
+    document.body.classList.add("glitch-active");
+    setTimeout(() => document.body.classList.remove("glitch-active"), 1500);
+    state.files = [];
+    searchSummary.innerHTML = `<span style="color: red; font-family: monospace; font-weight: bold; font-size: 14px;">[SYSTEM FATAL ERROR] ACCESS DENIED: Nice try, hacker.</span>`;
+    renderTree();
+    return;
+  }
+  
   if (!state.query) {
     state.files = state.tree.files;
     searchSummary.textContent = "";
@@ -79,13 +107,7 @@ timeView.addEventListener("click", () => {
 toggleSystem.addEventListener("click", () => {
   state.showSystem = !state.showSystem;
   chat.classList.toggle("show-system", state.showSystem);
-  toggleSystem.textContent = state.showSystem ? "隐藏系统消息" : "显示系统消息";
-});
-
-toggleTools.addEventListener("click", () => {
-  state.toolsExpanded = !state.toolsExpanded;
-  updateToolDetails();
-  updateToolButton();
+  toggleSystem.textContent = state.showSystem ? "隐藏系统及工具" : "显示系统及工具";
 });
 
 refreshButton.addEventListener("click", () => {
@@ -117,14 +139,17 @@ scrollBottomButton.addEventListener("click", () => {
   chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
 });
 
-hideSidebar.addEventListener("click", () => setSidebarHidden(true));
-showSidebar.addEventListener("click", () => setSidebarHidden(false));
+toggleSidebar.addEventListener("click", () => setSidebarHidden(!state.sidebarHidden));
 sidebarResizer.addEventListener("pointerdown", startSidebarResize);
 sidebarResizer.addEventListener("keydown", resizeSidebarWithKeyboard);
 window.addEventListener("resize", () => setSidebarWidth(state.sidebarWidth));
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeImagePreview();
+  if (event.key === "b" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    setSidebarHidden(!state.sidebarHidden);
+  }
 });
 
 themeToggle.addEventListener("click", (e) => {
@@ -156,7 +181,6 @@ async function init() {
   loadCollapseState();
   updateSourceUi();
   updateViewControls();
-  updateToolButton();
   renderTree();
   if (state.files[0]) loadSession(state.files[0].path);
   startAutoRefresh();
@@ -357,8 +381,6 @@ function applySidebarLayout() {
   setSidebarWidth(state.sidebarWidth);
   document.body.classList.toggle("sidebar-hidden", state.sidebarHidden);
   sidebar.setAttribute("aria-hidden", String(state.sidebarHidden));
-  hideSidebar.setAttribute("aria-expanded", String(!state.sidebarHidden));
-  showSidebar.setAttribute("aria-expanded", String(!state.sidebarHidden));
 }
 
 function startSidebarResize(event) {
@@ -587,8 +609,9 @@ function updateFileTitle(files, path, title) {
 }
 
 function renderMessage(message) {
+  const isTool = message.kind === "function_call" || message.kind === "function_output";
   const row = el("article", {
-    class: `message ${message.role}${message.hidden ? " hidden-message" : ""}`,
+    class: `message ${message.role}${message.hidden || isTool ? " hidden-message" : ""}`,
   });
   const stack = el("div", { class: "message-stack" });
   if (message.timestamp) {
@@ -599,7 +622,7 @@ function renderMessage(message) {
   if (message.kind === "function_call") {
     const details = el("details", {
       class: "tool-details",
-      open: state.toolsExpanded || hasQuery(message.text) ? "open" : null,
+      open: null,
     });
     details.append(el("summary", {}, `工具调用：${message.name || "tool"}`));
     details.append(el("pre", {}, highlight(message.text || "")));
@@ -607,7 +630,7 @@ function renderMessage(message) {
   } else if (message.kind === "function_output") {
     const details = el("details", {
       class: "tool-details",
-      open: state.toolsExpanded || hasQuery(message.text) ? "open" : null,
+      open: null,
     });
     details.append(el("summary", {}, `工具输出：${message.name || "tool"}`));
     details.append(el("pre", {}, highlight(message.text || "")));
@@ -667,16 +690,6 @@ function closeImagePreview() {
   document.body.classList.remove("preview-open");
 }
 
-function updateToolDetails() {
-  chat.querySelectorAll("details.tool-details").forEach((details) => {
-    details.open = state.toolsExpanded;
-  });
-}
-
-function updateToolButton() {
-  toggleTools.textContent = state.toolsExpanded ? "收起工具" : "展开工具";
-}
-
 function hasQuery(text) {
   return state.query && String(text || "").toLocaleLowerCase().includes(state.query.toLocaleLowerCase());
 }
@@ -711,8 +724,10 @@ function renderMarkdown(text) {
       continue;
     }
 
-    const fence = line.match(/^```([\w-]*)\s*$/);
+    const fence = line.match(/^```([^`]*)$/);
     if (fence) {
+      const info = fence[1].trim();
+      const lang = /^[\w-]+$/.test(info) ? info : "";
       const codeLines = [];
       index += 1;
       while (index < lines.length && !/^```\s*$/.test(lines[index])) {
@@ -720,9 +735,51 @@ function renderMarkdown(text) {
         index += 1;
       }
       if (index < lines.length) index += 1;
-      const code = el("code", fence[1] ? { class: `language-${fence[1]}` } : {});
-      code.append(highlight(codeLines.join("\n")));
-      fragment.append(el("pre", { class: "markdown-code" }, code));
+      
+      const codeContent = codeLines.join("\n");
+      const isLongCode = codeLines.length > 25;
+      const pre = el("pre", { class: `markdown-code ${isLongCode ? 'is-collapsed' : ''}` });
+      
+      const header = el("div", { class: "markdown-code-header" });
+      header.append(el("span", {}, info || "Code"));
+      
+      const copyBtn = el("button", { class: "copy-button", type: "button", title: "Copy Code" });
+      copyBtn.append("Copy");
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(codeContent);
+          copyBtn.textContent = "Copied!";
+          setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
+        } catch (err) {
+          copyBtn.textContent = "Error";
+        }
+      });
+      header.append(copyBtn);
+      pre.append(header);
+      
+      const codeWrapper = el("div", { class: "markdown-code-content" });
+      const code = el("code", lang ? { class: `language-${lang}` } : {});
+      code.append(highlight(codeContent));
+      codeWrapper.append(code);
+      pre.append(codeWrapper);
+      
+      if (isLongCode) {
+        const expandBtn = el("button", { class: "code-expand-button", type: "button" });
+        expandBtn.append("展开全部代码");
+        expandBtn.addEventListener("click", () => {
+          const collapsed = pre.classList.contains("is-collapsed");
+          if (collapsed) {
+            pre.classList.remove("is-collapsed");
+            expandBtn.textContent = "收起代码";
+          } else {
+            pre.classList.add("is-collapsed");
+            expandBtn.textContent = "展开全部代码";
+          }
+        });
+        pre.append(expandBtn);
+      }
+      
+      fragment.append(pre);
       continue;
     }
 
@@ -778,6 +835,10 @@ function renderMarkdown(text) {
       paragraphLines.push(lines[index]);
       index += 1;
     }
+    if (!paragraphLines.length) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
     const paragraph = el("p", { class: "markdown-paragraph" });
     appendInlineMarkdown(paragraph, paragraphLines.join("\n"));
     fragment.append(paragraph);
@@ -788,7 +849,7 @@ function renderMarkdown(text) {
 
 function isMarkdownBlockStart(lines, index) {
   const line = lines[index];
-  return /^```/.test(line) ||
+  return /^```([^`]*)$/.test(line) ||
     /^(#{1,6})\s+/.test(line) ||
     /^>\s?/.test(line) ||
     /^(\s*)([-*+]|\d+[.)])\s+/.test(line) ||
@@ -947,4 +1008,51 @@ function formatMessageTime(value) {
     minute: "2-digit",
     second: "2-digit",
   }).format(date);
+}
+
+// Easter Eggs
+const konamiSequence = 'ArrowUp,ArrowUp,ArrowDown,ArrowDown,ArrowLeft,ArrowRight,ArrowLeft,ArrowRight,b,a';
+let konamiKeys = [];
+let matrixInterval = null;
+
+document.addEventListener('keydown', (e) => {
+  konamiKeys.push(e.key);
+  if (konamiKeys.length > 10) konamiKeys.shift();
+  if (konamiKeys.join(',').toLowerCase() === konamiSequence.toLowerCase()) {
+    toggleMatrix();
+    konamiKeys = [];
+  }
+});
+
+function toggleMatrix() {
+  document.body.classList.toggle('matrix-active');
+  const canvas = document.getElementById('matrixCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  
+  if (document.body.classList.contains('matrix-active')) {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%^&*]*'.split('');
+    const fontSize = 16;
+    const columns = canvas.width / fontSize;
+    const drops = [];
+    for(let x = 0; x < columns; x++) drops[x] = 1;
+    
+    matrixInterval = setInterval(() => {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#0F0';
+      ctx.font = fontSize + 'px monospace';
+      for(let i = 0; i < drops.length; i++) {
+        const text = letters[Math.floor(Math.random() * letters.length)];
+        ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+        if(drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }, 33);
+  } else {
+    clearInterval(matrixInterval);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
 }
