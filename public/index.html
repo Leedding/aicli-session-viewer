@@ -7,9 +7,12 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <aside class="sidebar">
+    <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">
-        <h1 id="appTitle">AI 历史对话</h1>
+        <div class="sidebar-title-row">
+          <h1 id="appTitle">AI 历史对话</h1>
+          <button id="hideSidebar" class="icon-button" type="button" aria-label="隐藏目录" title="隐藏目录">‹</button>
+        </div>
         <div class="source-switch" role="group" aria-label="历史来源">
           <button id="claudeSource" type="button" data-source="claude">Claude</button>
           <button id="codexSource" type="button" data-source="codex">Codex</button>
@@ -27,7 +30,9 @@
       </div>
       <nav id="tree" class="tree"></nav>
     </aside>
+    <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="调整目录宽度" aria-orientation="vertical" tabindex="0"></div>
     <main class="main">
+      <button id="showSidebar" class="show-sidebar-button" type="button" aria-label="显示目录" title="显示目录">☰</button>
       <header class="session-header">
         <div>
           <h2 id="sessionTitle" contenteditable="true" spellcheck="false" title="点击编辑标题">选择一个会话</h2>

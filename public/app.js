@@ -11,11 +11,21 @@ const state = {
   collapsedGroups: new Set(),
   touchedGroups: new Set(),
   source: "claude",
+  sidebarWidth: 340,
+  sidebarHidden: false,
 };
 
 const COLLAPSE_STORAGE_PREFIX = "aiHistoryCollapsedGroups";
+const SIDEBAR_WIDTH_STORAGE_KEY = "aiHistorySidebarWidth";
+const SIDEBAR_HIDDEN_STORAGE_KEY = "aiHistorySidebarHidden";
+const MIN_SIDEBAR_WIDTH = 240;
+const MAX_SIDEBAR_WIDTH = 640;
 
 const appTitle = document.querySelector("#appTitle");
+const sidebar = document.querySelector("#sidebar");
+const sidebarResizer = document.querySelector("#sidebarResizer");
+const hideSidebar = document.querySelector("#hideSidebar");
+const showSidebar = document.querySelector("#showSidebar");
 const rootPath = document.querySelector("#rootPath");
 const treeEl = document.querySelector("#tree");
 const sourceButtons = [...document.querySelectorAll(".source-switch button")];
@@ -34,6 +44,7 @@ const toggleSystem = document.querySelector("#toggleSystem");
 const scrollTopButton = document.querySelector("#scrollTop");
 const scrollBottomButton = document.querySelector("#scrollBottom");
 let imagePreview = null;
+let sidebarDragStart = null;
 
 searchInput.addEventListener("input", debounce(async () => {
   state.query = searchInput.value.trim();
@@ -102,10 +113,17 @@ scrollBottomButton.addEventListener("click", () => {
   chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
 });
 
+hideSidebar.addEventListener("click", () => setSidebarHidden(true));
+showSidebar.addEventListener("click", () => setSidebarHidden(false));
+sidebarResizer.addEventListener("pointerdown", startSidebarResize);
+sidebarResizer.addEventListener("keydown", resizeSidebarWithKeyboard);
+window.addEventListener("resize", () => setSidebarWidth(state.sidebarWidth));
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeImagePreview();
 });
 
+loadSidebarLayout();
 await init();
 
 async function init() {
@@ -250,6 +268,94 @@ function updateSourceUi() {
   sourceButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.source === state.source);
   });
+}
+
+function loadSidebarLayout() {
+  try {
+    const savedWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+    if (Number.isFinite(savedWidth)) state.sidebarWidth = clampSidebarWidth(savedWidth);
+    state.sidebarHidden = localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY) === "true";
+  } catch {
+    state.sidebarWidth = clampSidebarWidth(state.sidebarWidth);
+    state.sidebarHidden = false;
+  }
+  applySidebarLayout();
+}
+
+function setSidebarHidden(hidden) {
+  state.sidebarHidden = hidden;
+  try {
+    localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, String(hidden));
+  } catch {
+    // Sidebar layout is a convenience; ignore storage failures.
+  }
+  applySidebarLayout();
+}
+
+function setSidebarWidth(width) {
+  state.sidebarWidth = clampSidebarWidth(width);
+  document.documentElement.style.setProperty("--sidebar-width", `${state.sidebarWidth}px`);
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(state.sidebarWidth));
+  } catch {
+    // Sidebar layout is a convenience; ignore storage failures.
+  }
+}
+
+function applySidebarLayout() {
+  setSidebarWidth(state.sidebarWidth);
+  document.body.classList.toggle("sidebar-hidden", state.sidebarHidden);
+  sidebar.setAttribute("aria-hidden", String(state.sidebarHidden));
+  hideSidebar.setAttribute("aria-expanded", String(!state.sidebarHidden));
+  showSidebar.setAttribute("aria-expanded", String(!state.sidebarHidden));
+}
+
+function startSidebarResize(event) {
+  if (state.sidebarHidden || event.button !== 0) return;
+  sidebarDragStart = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startWidth: state.sidebarWidth,
+  };
+  sidebarResizer.setPointerCapture(event.pointerId);
+  sidebarResizer.classList.add("resizing");
+  document.body.classList.add("resizing-sidebar");
+  sidebarResizer.addEventListener("pointermove", resizeSidebar);
+  sidebarResizer.addEventListener("pointerup", stopSidebarResize);
+  sidebarResizer.addEventListener("pointercancel", stopSidebarResize);
+  event.preventDefault();
+}
+
+function resizeSidebar(event) {
+  if (!sidebarDragStart || event.pointerId !== sidebarDragStart.pointerId) return;
+  setSidebarWidth(sidebarDragStart.startWidth + event.clientX - sidebarDragStart.startX);
+}
+
+function stopSidebarResize(event) {
+  if (!sidebarDragStart || event.pointerId !== sidebarDragStart.pointerId) return;
+  sidebarDragStart = null;
+  sidebarResizer.classList.remove("resizing");
+  document.body.classList.remove("resizing-sidebar");
+  sidebarResizer.removeEventListener("pointermove", resizeSidebar);
+  sidebarResizer.removeEventListener("pointerup", stopSidebarResize);
+  sidebarResizer.removeEventListener("pointercancel", stopSidebarResize);
+}
+
+function resizeSidebarWithKeyboard(event) {
+  if (state.sidebarHidden) return;
+  const step = event.shiftKey ? 40 : 16;
+  if (event.key === "ArrowLeft") {
+    setSidebarWidth(state.sidebarWidth - step);
+    event.preventDefault();
+  } else if (event.key === "ArrowRight") {
+    setSidebarWidth(state.sidebarWidth + step);
+    event.preventDefault();
+  }
+}
+
+function clampSidebarWidth(width) {
+  const viewportMax = Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 360);
+  return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), Math.min(MAX_SIDEBAR_WIDTH, viewportMax));
 }
 
 function collapseStorageKey() {
