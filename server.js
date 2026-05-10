@@ -380,8 +380,15 @@ function parseClaudeJsonl(text) {
           });
         });
       }
-      if (normalized.text.trim()) {
-        messages.push({ ...base, role: "user", kind: "message", text: normalized.text });
+      if (normalized.text.trim() || normalized.images.length) {
+        messages.push({
+          ...base,
+          role: "user",
+          kind: "message",
+          text: normalized.text,
+          images: normalized.images,
+          hidden: isClaudeInternalText(normalized.text),
+        });
       }
       return;
     }
@@ -389,8 +396,13 @@ function parseClaudeJsonl(text) {
     if (record.type === "assistant") {
       const content = Array.isArray(record.message?.content) ? record.message.content : [];
       const textParts = [];
+      const images = [];
       content.forEach((part, partIndex) => {
         if (part?.type === "text" && part.text) textParts.push(part.text);
+        if (part?.type === "image") {
+          const image = normalizeImage(part.source);
+          if (image) images.push(image);
+        }
         if (part?.type === "thinking" && part.thinking) {
           messages.push({
             ...base,
@@ -413,8 +425,8 @@ function parseClaudeJsonl(text) {
         }
       });
       if (typeof record.message?.content === "string") textParts.push(record.message.content);
-      if (textParts.join("\n\n").trim()) {
-        messages.push({ ...base, role: "assistant", kind: "message", text: textParts.join("\n\n") });
+      if (textParts.join("\n\n").trim() || images.length) {
+        messages.push({ ...base, role: "assistant", kind: "message", text: textParts.join("\n\n"), images });
       }
       return;
     }
@@ -434,12 +446,17 @@ function parseClaudeJsonl(text) {
 }
 
 function normalizeContent(content) {
-  if (typeof content === "string") return { text: content, toolResults: [] };
-  if (!Array.isArray(content)) return { text: "", toolResults: [] };
+  if (typeof content === "string") return { text: content, toolResults: [], images: [] };
+  if (!Array.isArray(content)) return { text: "", toolResults: [], images: [] };
   const text = [];
   const toolResults = [];
+  const images = [];
   content.forEach((part) => {
     if (part?.type === "text" && part.text) text.push(part.text);
+    if (part?.type === "image") {
+      const image = normalizeImage(part.source);
+      if (image) images.push(image);
+    }
     if (part?.type === "tool_result") {
       toolResults.push({
         toolUseId: part.tool_use_id || part.toolUseId || "",
@@ -447,7 +464,31 @@ function normalizeContent(content) {
       });
     }
   });
-  return { text: text.join("\n\n"), toolResults };
+  return { text: text.join("\n\n"), toolResults, images };
+}
+
+function normalizeImage(source) {
+  if (!source || typeof source !== "object") return null;
+  if (source.type === "base64" && source.data) {
+    const mediaType = safeImageMediaType(source.media_type || source.mediaType);
+    if (!mediaType) return null;
+    return {
+      src: `data:${mediaType};base64,${source.data}`,
+      mediaType,
+    };
+  }
+  if (source.type === "url" && source.url && /^https?:\/\//i.test(source.url)) {
+    return {
+      src: source.url,
+      mediaType: safeImageMediaType(source.media_type || source.mediaType) || "",
+    };
+  }
+  return null;
+}
+
+function safeImageMediaType(value) {
+  const mediaType = String(value || "").toLocaleLowerCase();
+  return /^image\/(png|jpe?g|gif|webp|avif)$/.test(mediaType) ? mediaType : "";
 }
 
 function formatToolInput(input) {
@@ -563,6 +604,14 @@ function isCodexInternalText(text) {
     trimmed.startsWith("<skills_instructions>") ||
     trimmed.startsWith("<plugins_instructions>") ||
     trimmed.startsWith("<apps_instructions>");
+}
+
+function isClaudeInternalText(text) {
+  const trimmed = text.trim();
+  return trimmed.startsWith("<local-command-caveat>") ||
+    trimmed.startsWith("<command-name>") ||
+    trimmed.startsWith("<local-command-stdout>") ||
+    trimmed.startsWith("<local-command-stderr>");
 }
 
 function parseCodexStartTime(name) {

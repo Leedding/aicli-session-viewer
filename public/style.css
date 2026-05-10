@@ -438,6 +438,42 @@ h2 {
   color: var(--accent);
 }
 
+.message-images {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.message-images:first-child {
+  margin-top: 0;
+}
+
+.message-image-button {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.message-image-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.message-image {
+  display: block;
+  max-width: min(100%, 720px);
+  max-height: 520px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  object-fit: contain;
+}
+
 .user .bubble {
   color: #ffffff;
   background: var(--user);
@@ -459,6 +495,55 @@ h2 {
 .user .markdown-table th,
 .user .markdown-table td {
   border-color: rgba(255, 255, 255, 0.24);
+}
+
+.user .message-image {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.preview-open {
+  overflow: hidden;
+}
+
+.image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgba(12, 18, 28, 0.82);
+  cursor: zoom-out;
+}
+
+.image-preview-image {
+  max-width: min(96vw, 1280px);
+  max-height: 92vh;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  object-fit: contain;
+  cursor: default;
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-preview-close:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
 }
 
 .tool .bubble,

@@ -33,6 +33,7 @@ const toggleTools = document.querySelector("#toggleTools");
 const toggleSystem = document.querySelector("#toggleSystem");
 const scrollTopButton = document.querySelector("#scrollTop");
 const scrollBottomButton = document.querySelector("#scrollBottom");
+let imagePreview = null;
 
 searchInput.addEventListener("input", debounce(async () => {
   state.query = searchInput.value.trim();
@@ -99,6 +100,10 @@ scrollTopButton.addEventListener("click", () => {
 
 scrollBottomButton.addEventListener("click", () => {
   chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeImagePreview();
 });
 
 await init();
@@ -452,12 +457,57 @@ function renderMessage(message) {
     bubble.append(details);
   } else {
     if (message.name) bubble.append(el("span", { class: "message-name" }, message.name));
-    bubble.append(renderMarkdown(message.text || ""));
+    if (message.text) bubble.append(renderMarkdown(message.text));
+    if (Array.isArray(message.images) && message.images.length) {
+      bubble.append(renderMessageImages(message.images));
+    }
   }
 
   stack.append(bubble);
   row.append(stack);
   return row;
+}
+
+function renderMessageImages(images) {
+  const gallery = el("div", { class: "message-images" });
+  images.forEach((image, index) => {
+    if (!image?.src) return;
+    const img = el("img", {
+      class: "message-image",
+      src: image.src,
+      alt: `对话图片 ${index + 1}`,
+      loading: "lazy",
+    });
+    const button = el("button", {
+      class: "message-image-button",
+      type: "button",
+      "aria-label": `放大图片 ${index + 1}`,
+    }, img);
+    button.addEventListener("click", () => openImagePreview(image.src, img.alt));
+    gallery.append(button);
+  });
+  return gallery;
+}
+
+function openImagePreview(src, alt) {
+  closeImagePreview();
+  imagePreview = el("div", { class: "image-preview", role: "dialog", "aria-modal": "true" },
+    el("button", { class: "image-preview-close", type: "button", "aria-label": "关闭图片预览" }, "×"),
+    el("img", { class: "image-preview-image", src, alt }),
+  );
+  imagePreview.addEventListener("click", (event) => {
+    if (event.target === imagePreview || event.target.closest(".image-preview-close")) closeImagePreview();
+  });
+  document.body.append(imagePreview);
+  document.body.classList.add("preview-open");
+  imagePreview.querySelector(".image-preview-close").focus();
+}
+
+function closeImagePreview() {
+  if (!imagePreview) return;
+  imagePreview.remove();
+  imagePreview = null;
+  document.body.classList.remove("preview-open");
 }
 
 function updateToolDetails() {
